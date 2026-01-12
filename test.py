@@ -72,7 +72,7 @@ def process_discharge_data(df, filename, forced_start_cycle=None):
     return pd.DataFrame(cycles_data), None
 
 # --- FRONTEND UI ---
-st.set_page_config(page_title="CycleLab Pro", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Battery Studio", page_icon="⚡", layout="wide")
 
 # Custom CSS for minor styling tweaks (Clean Header)
 st.markdown("""
