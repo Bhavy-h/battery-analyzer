@@ -4,6 +4,89 @@ import io
 import re
 import plotly.express as px
 
+import streamlit.components.v1 as components
+
+def render_animated_header():
+    """
+    Renders a custom HTML header animated with Anime.js
+    """
+    # We use a raw HTML string with the Anime.js CDN and a script
+    html_code = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
+        <style>
+            .header-container {
+                display: flex;
+                justify-content: left;
+                align-items: center;
+                font-family: 'Source Sans Pro', sans-serif;
+            }
+            .icon {
+                font-size: 3rem;
+                margin-right: 15px;
+                display: inline-block;
+            }
+            .title {
+                font-size: 3rem;
+                font-weight: 700;
+                color: #1E1E1E;
+                display: inline-block;
+                letter-spacing: -1px;
+            }
+            .subtitle {
+                font-size: 1.2rem;
+                color: #666;
+                margin-top: -10px;
+                margin-left: 65px;
+                opacity: 0; /* Start hidden */
+            }
+        </style>
+    </head>
+    <body>
+        <div class="header-container">
+            <div class="icon">⚡</div>
+            <div class="title">CycleLab <span style="color: #FF4B4B;">Pro</span></div>
+        </div>
+        <div class="subtitle">Automated Cycle Life Analysis & Degradation Tracking</div>
+
+        <script>
+            // 1. Animate the Icon (Spin and fade in)
+            anime({
+                targets: '.icon',
+                rotate: '1turn',
+                opacity: [0, 1],
+                duration: 2000,
+                easing: 'spring(1, 80, 10, 0)'
+            });
+
+            // 2. Animate the Title (Slide up)
+            anime({
+                targets: '.title',
+                translateY: [50, 0],
+                opacity: [0, 1],
+                duration: 1500,
+                delay: 200,
+                easing: 'easeOutExpo'
+            });
+            
+            // 3. Animate the Subtitle (Fade in slowly)
+            anime({
+                targets: '.subtitle',
+                opacity: [0, 1],
+                translateY: [20, 0],
+                duration: 2000,
+                delay: 800,
+                easing: 'easeOutQuad'
+            });
+        </script>
+    </body>
+    </html>
+    """
+    # Render the HTML with a specific height so it fits perfectly
+    components.html(html_code, height=130, scrolling=False)
+
 # --- HELPER: Extract Start Number ---
 def get_start_cycle_from_name(filename):
     numbers = re.findall(r'\d+', filename)
@@ -125,8 +208,9 @@ if not uploaded_files:
     st.session_state.summary_stats = None
 
 # --- MAIN HERO SECTION ---
-st.markdown('<div class="main-header">⚡ CycleLab Pro</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Automated Cycle Life Analysis & Degradation Tracking</div>', unsafe_allow_html=True)
+# --- MAIN HERO SECTION ---
+# Use the new Anime.js header
+render_animated_header()
 
 if uploaded_files:
     # ACTION BAR
