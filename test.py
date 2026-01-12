@@ -1,18 +1,33 @@
 import streamlit as st
 import pandas as pd
 import io
+import re
 
-# --- CORE LOGIC (Verified) ---
-def process_discharge_data(df, filename, start_cycle_num=0):
+# --- HELPER: Extract Start Number from Filename ---
+def get_start_cycle_from_name(filename):
     """
-    Detects discharge cycles using Peak-to-Zero logic.
+    Looks for the first number in the filename to use as the start cycle.
+    Example: "V-T 1001-2000.xlsx" -> Returns 1001
+    """
+    # Find all sequences of digits
+    numbers = re.findall(r'\d+', filename)
+    if numbers:
+        # Return the first number found (converted to integer)
+        return int(numbers[0])
+    return 1 # Default to 1 if no number found
+
+# --- CORE LOGIC ---
+def process_discharge_data(df, filename, forced_start_cycle=None):
+    """
+    Detects discharge cycles.
+    forced_start_cycle: If provided, starts counting from this number.
     """
     cols = df.columns
     time_col = next((c for c in cols if 'ime' in c), None) 
     volt_col = next((c for c in cols if 'oltage' in c or 'otential' in c), None)
 
     if not time_col or not volt_col:
-        return None, f"Error in {filename}: Could not detect 'Time' or 'Voltage' columns."
+        return None, f"Error in {filename}: Could not detect columns."
 
     df = df.sort_values(by=time_col).reset_index(drop=True)
     times = df[time_col].values
@@ -53,11 +68,18 @@ def process_discharge_data(df, filename, start_cycle_num=0):
     min_len = min(len(peaks_arr), len(zeros_arr))
     cycles_data = []
     
+    # DETERMINE STARTING NUMBER
+    # If we parsed a number from the filename, use that. 
+    # Otherwise fallback to 1.
+    start_num = forced_start_cycle if forced_start_cycle is not None else 1
+    
     for k in range(min_len):
         start = peaks_arr[k]
         end = zeros_arr[k]
         duration_seconds = (end - start) * 60
-        actual_cycle_number = (k + 1) + start_cycle_num
+        
+        # Use the specific start number + k
+        actual_cycle_number = start_num + k
         
         cycles_data.append({
             'Source_File': filename,
@@ -72,10 +94,10 @@ st.set_page_config(page_title="Batch Discharge Analyzer", page_icon="⚡", layou
 
 st.title("⚡ Batch Battery Analyzer")
 st.markdown("""
-**Upload multiple files.** The app provides a Master CSV for everything, plus individual download buttons for each file.
+**Upload multiple files.** The app detects the cycle range from the filename (e.g., "1001-2000" starts at 1001).
 """)
 
-# 1. Initialize Session State if not present
+# Initialize Session State
 if 'processed_results' not in st.session_state:
     st.session_state.processed_results = None
 if 'summary_stats' not in st.session_state:
@@ -83,24 +105,22 @@ if 'summary_stats' not in st.session_state:
 
 uploaded_files = st.file_uploader("Upload Data Files", type=["xlsx", "csv"], accept_multiple_files=True)
 
-# Logic: If files are removed, clear the memory
 if not uploaded_files:
     st.session_state.processed_results = None
     st.session_state.summary_stats = None
 
 if uploaded_files:
-    # --- ANALYZE BUTTON BLOCK ---
-    # Only run the heavy calculation when this button is clicked
     if st.button(f"Analyze {len(uploaded_files)} Files"):
         
         temp_results = []
         temp_stats = []
-        current_cycle_count = 0 
         
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        sorted_files = sorted(uploaded_files, key=lambda x: x.name)
+        # SORTING FIX: Sort files numerically based on the first number in the name
+        # This fixes the "10001 comes before 1001" issue
+        sorted_files = sorted(uploaded_files, key=lambda x: get_start_cycle_from_name(x.name))
         
         for i, uploaded_file in enumerate(sorted_files):
             status_text.text(f"Processing {uploaded_file.name}...")
@@ -112,7 +132,11 @@ if uploaded_files:
                 else:
                     df = pd.read_excel(uploaded_file)
 
-                result_df, error = process_discharge_data(df, uploaded_file.name, start_cycle_num=current_cycle_count)
+                # 1. EXTRACT START NUMBER FROM FILENAME
+                start_from_name = get_start_cycle_from_name(uploaded_file.name)
+                
+                # 2. PROCESS WITH FORCED START NUMBER
+                result_df, error = process_discharge_data(df, uploaded_file.name, forced_start_cycle=start_from_name)
                 
                 if error:
                     st.error(error)
@@ -123,21 +147,21 @@ if uploaded_files:
                     })
                     
                     num_new_cycles = len(result_df)
+                    # Calculate range based on what was actually generated
+                    first_cycle = result_df['Cycle Number'].min()
+                    last_cycle = result_df['Cycle Number'].max()
                     avg_time = result_df['Discharge Time (Seconds)'].mean()
                     
                     temp_stats.append({
                         "Filename": uploaded_file.name,
                         "Cycles Found": num_new_cycles,
-                        "Range": f"{current_cycle_count + 1} - {current_cycle_count + num_new_cycles}",
+                        "Range": f"{first_cycle} - {last_cycle}",
                         "Avg Time (s)": round(avg_time, 2)
                     })
-                    
-                    current_cycle_count += num_new_cycles
                     
             except Exception as e:
                 st.error(f"Failed to process {uploaded_file.name}: {e}")
 
-        # SAVE TO SESSION STATE (This is the Magic Step)
         st.session_state.processed_results = temp_results
         st.session_state.summary_stats = temp_stats
         
@@ -145,17 +169,14 @@ if uploaded_files:
         st.success("Processing Complete!")
 
     # --- DISPLAY BLOCK ---
-    # This runs every time, checking if data exists in memory
     if st.session_state.processed_results:
         
-        # 1. Summary Table
         st.subheader("📊 Summary Statistics")
         summary_df = pd.DataFrame(st.session_state.summary_stats)
         st.dataframe(summary_df, use_container_width=True)
         
         st.divider()
 
-        # 2. Downloads
         col_master, col_indiv = st.columns([1, 1])
         
         with col_master:
@@ -164,6 +185,9 @@ if uploaded_files:
             
             all_dfs = [item['df'] for item in st.session_state.processed_results]
             master_df = pd.concat(all_dfs, ignore_index=True)
+            # Optional: Sort Master by Cycle Number just in case
+            master_df = master_df.sort_values(by="Cycle Number")
+            
             csv_master = master_df.to_csv(index=False).encode('utf-8')
             
             st.download_button(
