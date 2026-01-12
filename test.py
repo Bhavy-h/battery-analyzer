@@ -2,11 +2,11 @@ import streamlit as st
 import pandas as pd
 import io
 
-# --- CORE LOGIC (Verified 3-Pointer + Edge Checks) ---
-def process_discharge_data(df, filename):
+# --- CORE LOGIC (Updated for Continuous Numbering) ---
+def process_discharge_data(df, filename, start_cycle_num=0):
     """
     Detects discharge cycles using Peak-to-Zero logic.
-    Returns a DataFrame with Cycle Number, Discharge Time (seconds), and Source Filename.
+    start_cycle_num: The starting number for the first cycle (e.g., 0, 1000, etc.)
     """
     # 1. Auto-detect columns
     cols = df.columns
@@ -29,7 +29,6 @@ def process_discharge_data(df, filename):
     looking_for_peak = True
     
     # EDGE CHECK: Index 0 (Left Edge)
-    # If file starts with a peak (High Voltage), capture it
     if count > 1 and volts[0] > 0.5 and volts[0] > volts[1]:
         peaks_arr.append(times[0])
         looking_for_peak = False
@@ -42,18 +41,17 @@ def process_discharge_data(df, filename):
         if looking_for_peak:
             prev_v = volts[i-1]
             next_v = volts[i+1]
-            # Peak Logic: Mid > Left AND Mid > Right
+            # Peak Logic
             if (current_v > prev_v) and (current_v > next_v) and current_v > 0.5:
                 peaks_arr.append(current_t)
                 looking_for_peak = False 
         else:
-            # Zero Logic: Voltage <= 0.05
+            # Zero Logic
             if current_v <= 0.05:
                 zeros_arr.append(current_t)
                 looking_for_peak = True 
 
     # EDGE CHECK: Last Index (Right Edge)
-    # If file ends exactly at 0V, capture it
     if not looking_for_peak: 
         if volts[-1] <= 0.05:
             zeros_arr.append(times[-1])
@@ -66,13 +64,16 @@ def process_discharge_data(df, filename):
         start = peaks_arr[k]
         end = zeros_arr[k]
         
-        # Multiply by 60 to convert Minutes -> Seconds
         duration_minutes = end - start
         duration_seconds = duration_minutes * 60
         
+        # --- LOGIC UPDATE: Use the starting offset ---
+        # If start_cycle_num is 1000, the first cycle here becomes 1001
+        actual_cycle_number = (k + 1) + start_cycle_num
+        
         cycles_data.append({
             'Source_File': filename,
-            'Cycle Number': k + 1,
+            'Cycle Number': actual_cycle_number,
             'Discharge Time (Seconds)': duration_seconds
         })
         
@@ -81,82 +82,82 @@ def process_discharge_data(df, filename):
 # --- FRONTEND UI ---
 st.set_page_config(page_title="Batch Discharge Analyzer", page_icon="⚡", layout="wide")
 
-st.title("⚡ Batch Battery Analyzer (Test Mode)")
+st.title("⚡ Batch Battery Analyzer (Continuous Numbering)")
 st.markdown("""
-**Upload multiple files at once.** The app will combine them into a single Master CSV and provide a summary table.
+**Upload multiple files.** The cycle numbering will continue from one file to the next (e.g., File 1: 1-1000, File 2: 1001-2000).
 """)
 
-# MULTI-FILE UPLOADER
-uploaded_files = st.file_uploader("Upload Data Files (.csv or .xlsx)", type=["xlsx", "csv"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("Upload Data Files", type=["xlsx", "csv"], accept_multiple_files=True)
 
 if uploaded_files:
-    # Containers for results
     all_files_data = []
     summary_stats = []
     
-    # UI Elements for progress
+    # --- NEW: Global Counter ---
+    current_cycle_count = 0 
+    
     progress_bar = st.progress(0)
     status_text = st.empty()
 
-    # START BUTTON
     if st.button(f"Analyze {len(uploaded_files)} Files"):
         
-        for i, uploaded_file in enumerate(uploaded_files):
-            # Update Progress
-            status_text.text(f"Processing file {i+1}/{len(uploaded_files)}: {uploaded_file.name}...")
-            progress_bar.progress((i + 1) / len(uploaded_files))
+        # Sort files by name so the order is predictable (File1, File2, File3...)
+        # This ensures 1001 comes after 1000, not random order.
+        sorted_files = sorted(uploaded_files, key=lambda x: x.name)
+        
+        for i, uploaded_file in enumerate(sorted_files):
+            status_text.text(f"Processing file {i+1}/{len(sorted_files)}: {uploaded_file.name} (Starting at Cycle {current_cycle_count + 1})...")
+            progress_bar.progress((i + 1) / len(sorted_files))
             
             try:
-                # Load File
                 if uploaded_file.name.endswith('.csv'):
                     df = pd.read_csv(uploaded_file)
                 else:
                     df = pd.read_excel(uploaded_file)
 
-                # Process
-                result_df, error = process_discharge_data(df, uploaded_file.name)
+                # --- PASS THE CURRENT COUNT ---
+                result_df, error = process_discharge_data(df, uploaded_file.name, start_cycle_num=current_cycle_count)
                 
                 if error:
                     st.error(error)
                 else:
-                    # Append to Master List
                     all_files_data.append(result_df)
                     
-                    # Calculate Stats for Summary Table
+                    # Update stats
+                    num_new_cycles = len(result_df)
                     avg_time = result_df['Discharge Time (Seconds)'].mean()
-                    total_cycles = len(result_df)
+                    
                     summary_stats.append({
                         "Filename": uploaded_file.name,
-                        "Total Cycles": total_cycles,
-                        "Avg Discharge Time (s)": round(avg_time, 2)
+                        "Cycles Found": num_new_cycles,
+                        "Range": f"{current_cycle_count + 1} - {current_cycle_count + num_new_cycles}",
+                        "Avg Time (s)": round(avg_time, 2)
                     })
+                    
+                    # --- UPDATE COUNTER FOR NEXT FILE ---
+                    current_cycle_count += num_new_cycles
                     
             except Exception as e:
                 st.error(f"Failed to process {uploaded_file.name}: {e}")
 
-        # --- DISPLAY RESULTS ---
         if all_files_data:
             st.success("Processing Complete!")
             status_text.empty()
             
-            # 1. Show Summary Table
             st.subheader("📊 Summary Statistics")
             summary_df = pd.DataFrame(summary_stats)
             st.dataframe(summary_df, use_container_width=True)
             
-            # 2. Create Master CSV
             master_df = pd.concat(all_files_data, ignore_index=True)
             
-            st.subheader("📥 Download All Data")
-            st.markdown("Download the combined data for all batteries in one click.")
-            
+            st.subheader("📥 Download Master Data")
             csv = master_df.to_csv(index=False).encode('utf-8')
             
             st.download_button(
-                label="Download Master CSV (All Files)",
+                label="Download Master CSV",
                 data=csv,
-                file_name="batch_discharge_results.csv",
+                file_name="continuous_cycle_results.csv",
                 mime="text/csv"
             )
         else:
-            st.warning("No valid data found in the uploaded files.")
+            st.warning("No valid data found.")
